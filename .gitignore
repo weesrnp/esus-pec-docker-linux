@@ -1,0 +1,57 @@
+# ==============================================================================
+# e-SUS PEC Docker Linux - .gitignore Rigoroso (LGPD & Segurança)
+# ==============================================================================
+
+# Credenciais e Variáveis de Ambiente
+.env
+.env.*
+!.env.example
+admin.pass
+*.pass
+*.secret
+
+# Certificados Digitais, Chaves Criptográficas e SSL (RNDS / ICP-Brasil)
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+ssl.properties
+container.p12
+keystore.p12
+
+# Dumps e Backups de Banco de Dados (Proteção Integral de Dados de Pacientes - LGPD)
+backups/
+*.backup
+*.dump
+*.tar.gz
+*.sql.gz
+*.sql.bz2
+
+# Binários Pesados e Instaladores do DATASUS (Não versionar no Git!)
+*.jar
+*.war
+downloads/
+dist/
+
+# Diretórios de Dados Persistentes do Docker
+volumes/
+data/
+dados/
+pg_data/
+
+# Logs de Aplicação e Runtime
+logs/
+*.log
+stdout.log
+stderr.log
+
+# Arquivos de Sistema e IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

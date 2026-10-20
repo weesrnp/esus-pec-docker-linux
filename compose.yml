@@ -1,0 +1,87 @@
+# ==============================================================================
+# e-SUS APS PEC em Docker (Linux) - Orquestração Docker Compose Oficial
+# ==============================================================================
+# Execução:
+#   1. cp .env.example .env (ajuste as senhas e portas)
+#   2. docker compose build
+#   3. docker compose up -d
+# ==============================================================================
+name: esus-pec
+
+services:
+  # ----------------------------------------------------------------------------
+  # Banco de Dados PostgreSQL (Otimizado para o Star Schema de 1.200 tabelas)
+  # ----------------------------------------------------------------------------
+  esus-db:
+    image: postgres:16-alpine
+    container_name: esus-db
+    restart: unless-stopped
+    shm_size: 1g
+    command: >
+      postgres
+      -c password_encryption=md5
+      -c shared_buffers=2GB
+      -c effective_cache_size=6GB
+      -c maintenance_work_mem=512MB
+      -c work_mem=32MB
+      -c max_connections=200
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c random_page_cost=1.1
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-esus}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-altere_essa_senha_super_secreta_aqui_123}
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - ./volumes/pg_data:/var/lib/postgresql/data
+      - ./sql/01-init-esus-leitura.sql:/docker-entrypoint-initdb.d/01-init-esus-leitura.sql:ro
+    ports:
+      - "${LAN_IP:-127.0.0.1}:${POSTGRES_EXTERNAL_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-esus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - esus-net
+
+  # ----------------------------------------------------------------------------
+  # Aplicação e-SUS APS PEC (Runtime Spring Boot / Undertow)
+  # ----------------------------------------------------------------------------
+  esus-pec:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        PEC_JAR: ${PEC_JAR_FILE:-}
+    container_name: esus-pec
+    restart: unless-stopped
+    depends_on:
+      esus-db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://esus-db:5432/${POSTGRES_DB:-esus}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-altere_essa_senha_super_secreta_aqui_123}
+      DB_HOST: esus-db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_NAME: ${POSTGRES_DB:-esus}
+      PEC_HEAP: ${PEC_HEAP:-4096M}
+      PEC_SSL: ${PEC_SSL:-0}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - ./volumes/pec_config:/opt/pec/webserver/config
+      - ./volumes/pec_chaves:/opt/pec/webserver/chaves
+      - ./volumes/pec_certmgr:/opt/pec/webserver/certmgr/config
+    ports:
+      - "${LAN_IP:-127.0.0.1}:${PEC_HTTP_PORT:-8080}:8080"
+      - "${LAN_IP:-127.0.0.1}:${PEC_HTTPS_PORT:-443}:443"
+    networks:
+      - esus-net
+
+networks:
+  esus-net:
+    driver: bridge
