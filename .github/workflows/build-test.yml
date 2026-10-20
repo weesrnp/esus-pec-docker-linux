@@ -1,24 +1,100 @@
-name: Docker Lint & Compose Validation
+name: Validação (lint, compose e SQL)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+
+permissions:
+  contents: read
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
+  lint:
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Validate Compose Syntax
+      - name: Fins de linha LF e scripts executáveis
+        run: |
+          if git ls-files --eol | grep -E '^i/crlf'; then
+            echo "Arquivos com CRLF no repositório"; exit 1
+          fi
+          for f in scripts/*.sh docker/*.sh sql/*.sh; do
+            mode=$(git ls-files -s "$f" | cut -d' ' -f1)
+            [ "$mode" = "100755" ] || { echo "$f sem bit executável ($mode)"; exit 1; }
+          done
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --version
+          shellcheck -x scripts/*.sh docker/*.sh sql/*.sh
+
+      - name: Hadolint
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: docker/Dockerfile
+
+      - name: Compose (config com .env gerado)
+        run: |
+          ./scripts/gerar-env.sh
+          test "$(stat -c %a .env)" = "600"
+          docker compose config -q
+          PEC_SSL_DOMAIN=esus.exemplo.gov.br docker compose -f compose.yml -f compose.ssl.yml config -q
+          # Sem .env o compose deve recusar subir (senhas obrigatórias)
+          mv .env .env.ci
+          if docker compose config -q 2>/dev/null; then echo "compose aceitou subir sem senha"; exit 1; fi
+          mv .env.ci .env
+
+      - name: Banco recusa a senha de exemplo antes do initdb
         run: |
           cp .env.example .env
-          docker compose config
+          docker compose up -d esus-db
+          sleep 10
+          docker logs esus-db 2>&1 | grep -q "POSTGRES_PASSWORD fraca"
+          ! sudo test -f volumes/pg_data/PG_VERSION
+          docker compose down
 
-      - name: Check Shell Scripts Syntax
+  sql:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Usuário de leitura num PostgreSQL 16 real
         run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck scripts/*.sh docker/*.sh
+          ./scripts/gerar-env.sh
+          docker compose up -d esus-db
+          for i in $(seq 1 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' esus-db)" = healthy ] && break
+            sleep 2
+          done
+          docker logs esus-db 2>&1 | grep -q "esus_leitura OK" || { docker logs esus-db; exit 1; }
+          set -a; . ./.env; set +a
+          q() { docker exec -e PGPASSWORD="$ESUS_LEITURA_PASSWORD" esus-db \
+                  psql -h 127.0.0.1 -U esus_leitura -d esus -tAc "$1"; }
+          test "$(q 'show default_transaction_read_only')" = "on"
+          test "$(q 'show statement_timeout')" = "30s"
+          if q 'create table public.x(i int)' 2>/dev/null; then echo "leitura conseguiu criar tabela"; exit 1; fi
+          # Banco no estilo PostgreSQL 9.6 (CREATE em public para todos): o SQL precisa revogar
+          docker exec esus-db psql -U postgres -d esus -c 'grant create on schema public to public'
+          docker exec -i -e ESUS_LEITURA_PASSWORD esus-db psql -v ON_ERROR_STOP=1 -U postgres -d esus -f - < sql/esus-leitura.sql
+          docker exec -e PGPASSWORD="$ESUS_LEITURA_PASSWORD" esus-db psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U esus_leitura -d esus \
+            -c 'set default_transaction_read_only=off' -c 'create table public.z(i int)' 2>&1 | grep -q 'permission denied'
+          # A senha antiga que ficou no histórico do repositório não pode valer
+          if docker exec -e PGPASSWORD=esus_leitura_segura_2026 esus-db psql -h 127.0.0.1 -U esus_leitura -d esus -c 'select 1' 2>/dev/null; then
+            echo "senha antiga aceita"; exit 1
+          fi
+          docker exec esus-db psql -U postgres -tAc "select rolconnlimit from pg_roles where rolname='esus_leitura'" | grep -qx 5
+          docker exec esus-db psql -U postgres -tAc "show password_encryption" | grep -qx scram-sha-256
+          docker exec esus-db psql -U postgres -tAc "show datestyle" | grep -qx "ISO, DMY"
+          docker exec esus-db psql -U postgres -tAc "select string_agg(n, ',' order by n) from (values ('Zélia'),('Álvaro'),('ana'),('Beatriz')) v(n)" \
+            | grep -qx "Álvaro,ana,Beatriz,Zélia"
+          # Senha errada precisa ser recusada (sem trust na rede)
+          if docker exec -e PGPASSWORD=errada esus-db psql -h 127.0.0.1 -U esus_leitura -d esus -c 'select 1' 2>/dev/null; then
+            echo "senha errada aceita"; exit 1
+          fi
+
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose logs esus-db
