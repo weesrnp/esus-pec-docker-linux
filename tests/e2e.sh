@@ -128,7 +128,8 @@ check "dados intactos" test "$(psqlq 'select count(*) > 0 from tb_config_sistema
 psqlq "grant create on schema public to public" >/dev/null
 docker exec -i -e ESUS_LEITURA_PASSWORD="$RO_PASS" esus-db \
   psql -v ON_ERROR_STOP=1 -X -q -U postgres -d esus -f - < sql/esus-leitura.sql >/dev/null
-expect_denied "REVOKE CREATE em public (banco no estilo 9.6)" "$RO_PASS" 'create table public.x_teste(i int)'
+expect_denied "REVOKE CREATE em public (banco no estilo 9.6)" \
+  "$RO_PASS" 'set default_transaction_read_only=off' 'create table public.x_teste(i int)'
 check "leitura com limite de 5 conexões" test "$(psqlq "select rolconnlimit from pg_roles where rolname='esus_leitura'")" = "5"
 check "porta do banco só no loopback" bash -c "docker port esus-db 5432 | grep -q '^127.0.0.1:'"
 

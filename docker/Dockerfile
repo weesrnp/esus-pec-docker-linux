@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # ==============================================================================
 # e-SUS APS PEC em Docker (Linux)
 # ==============================================================================
@@ -16,8 +15,13 @@ FROM alpine:3.20 AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
+# Até 5 tentativas: o CDN do Alpine às vezes responde 503 por alguns minutos.
 # hadolint ignore=DL3018
-RUN apk add --no-cache unzip curl
+RUN for i in 1 2 3 4 5; do \
+        apk add --no-cache unzip curl && exit 0; \
+        echo "apk falhou (tentativa $i), nova tentativa em 15s..." >&2; sleep 15; \
+    done; \
+    exit 1
 
 # PEC_JAR: nome do instalador dentro de instalador/ (ex.: eSUS-AB-PEC-5.5.28-Linux64.jar)
 # DOWNLOAD_URL: alternativa ao arquivo local (URL oficial em arquivos.esusaps.ufsc.br)
@@ -83,7 +87,8 @@ ARG PEC_UID=10001
 
 # Fontes para relatórios (receitas, espelho SOAP) e pg_isready para esperar o banco.
 # hadolint ignore=DL3008
-RUN apt-get update && \
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && \
     echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
     apt-get install -y --no-install-recommends \
         fontconfig \
