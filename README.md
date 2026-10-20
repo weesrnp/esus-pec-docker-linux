@@ -24,7 +24,7 @@ Ambiente padronizado em contêineres Docker para implantação, execução e man
 | **Orquestração** | Docker Engine & Docker Compose v2 | Isolamento de processos, rede bridge dedicada e controle de ciclo de vida |
 | **Aplicação** | Java (OpenJDK 17 / Eclipse Temurin) | Runtime oficial do backend monolítico Spring Boot (`pec-bundle.jar`) |
 | **Banco de Dados** | PostgreSQL 16 (ou 9.6) Alpine | Persistência relacional otimizada para o Data Warehouse (~1.200 tabelas) |
-| **Automação** | Bash Shell Scripting | Scripts operacionais de backup, restauração e resolução de releases |
+| **Automação** | Bash Shell Scripting | Scripts operacionais de backup, restauração, diagnósticos e automação do Cron |
 | **Segurança & SSL** | PKCS12 Keystore (`certmgr.jar`) | Gestão e renovação automática de certificados TLS na porta 443 |
 | **Relatórios** | Fontconfig & Microsoft Core Fonts | Renderização vetorial e impressão consistente de receitas e espelhos SOAP em PDF |
 
@@ -34,6 +34,7 @@ Ambiente padronizado em contêineres Docker para implantação, execução e man
 
 - **Build multi-stage:** O `Dockerfile` extrai os artefatos oficiais da aplicação (`pec-bundle.jar`, `certmgr.jar`) diretamente do pacote instalador em tempo de compilação, gerando uma imagem de runtime enxuta (~250 MB).
 - **Sem emulações de init:** Executa diretamente o executável Java do PEC (`pec-bundle.jar`), dispensando wrappers de gerenciador de inicialização do sistema operacional.
+- **Sub-rede fixa anti-conflito (`198.18.200.0/24`):** Rede isolada em bloco reservado para benchmarks que não colide com faixas privadas comumente empregadas em enlaces municipais e VPNs (`10/8`, `172.16/12` e `192.168/16`).
 - **Tuning de PostgreSQL para APS:** Ajustes de parâmetros de memória (`shared_buffers=2GB`, `effective_cache_size=6GB`, `work_mem=32MB`) para agilizar consultas do modelo Star Schema (`tb_fat_*` e `tb_dim_*`).
 - **Isolamento e LGPD:** Provisionamento automatizado do papel `esus_leitura`, com permissões estritas de `READ ONLY` e `statement_timeout` configurado para relatórios externos e auditoria.
 - **Persistência desacoplada:** Volumes mapeados para configurações, chaves de transmissão da RNDS e dados de banco, permitindo atualização transparente da aplicação sem perda de estado.
@@ -59,14 +60,20 @@ cp .env.example .env
 ```
 Revise o arquivo `.env` para definir senhas seguras e portas conforme seu planejamento de rede.
 
-### 2. Obter o instalador oficial do e-SUS PEC
-Você pode colocar o arquivo instalador oficial (`eSUS-AB-PEC-*-Linux64.jar`) diretamente na raiz do projeto ou executar o script automatizado de download:
+### 2. Validação pré-voo (Doctor)
+Execute o diagnóstico do ambiente para checar RAM, portas livres e requisitos do Docker:
 ```bash
 chmod +x scripts/*.sh docker/*.sh
+./scripts/doctor.sh
+```
+
+### 3. Obter o instalador oficial do e-SUS PEC
+Você pode colocar o arquivo instalador oficial (`eSUS-AB-PEC-*-Linux64.jar`) diretamente na raiz do projeto ou executar o script automatizado de download:
+```bash
 ./scripts/get-latest-pec.sh --download
 ```
 
-### 3. Compilar e iniciar a stack
+### 4. Compilar e iniciar a stack
 ```bash
 docker compose build
 docker compose up -d
@@ -84,23 +91,26 @@ Após a conclusão do bootstrap do Spring Boot, acesse no navegador: `http://loc
 ```
 esus-pec-docker-linux/
 ├── assets/
-│   └── banner.png         # Imagem de capa do repositório
+│   └── banner.png             # Imagem de capa do repositório
 ├── docker/
-│   ├── Dockerfile         # Definição multi-stage da imagem da aplicação
-│   └── entrypoint.sh      # Script de inicialização da JVM e checagem de banco
+│   ├── Dockerfile             # Definição multi-stage da imagem da aplicação
+│   └── entrypoint.sh          # Script de inicialização da JVM e checagem de banco
 ├── sql/
 │   └── 01-init-esus-leitura.sql # Provisionamento do usuário de leitura (LGPD)
 ├── scripts/
-│   ├── backup.sh          # Rotina de dump comprimido do PostgreSQL
-│   ├── restore.sh         # Script de restauração assistida com pg_restore
-│   └── get-latest-pec.sh  # Consulta e download oficial no portal SISAPS
+│   ├── doctor.sh              # Diagnóstico pré-voo de hardware, portas e ambiente
+│   ├── backup.sh              # Rotina de dump comprimido do PostgreSQL
+│   ├── restore.sh             # Script de restauração assistida com pg_restore
+│   ├── setup-cron-backup.sh   # Agendador de backup diário com expurgo no crontab
+│   ├── init-new-db.sh         # Inicializador de schema para bases limpas (Liquibase)
+│   └── get-latest-pec.sh      # Consulta e download oficial no portal SISAPS
 ├── docs/
-│   └── POP-MIGRACAO.md    # Roteiro de migração de ambientes Windows para Linux
-├── compose.yml            # Orquestração dos serviços esus-db e esus-pec
-├── .env.example           # Modelo documentado de variáveis de ambiente
-├── .gitignore             # Bloqueio de arquivos sensíveis, certificados e dumps
-├── LICENSE                # Licença MIT
-└── README.md              # Documentação oficial do projeto
+│   └── POP-MIGRACAO.md        # Roteiro de migração de ambientes Windows para Linux
+├── compose.yml                # Orquestração dos serviços esus-db e esus-pec
+├── .env.example               # Modelo documentado de variáveis de ambiente
+├── .gitignore                 # Bloqueio de arquivos sensíveis, certificados e dumps
+├── LICENSE                    # Licença MIT
+└── README.md                  # Documentação oficial do projeto
 ```
 
 ---
@@ -113,7 +123,24 @@ esus-pec-docker-linux/
 ```
 Gera um arquivo de dump no formato customizado (`.backup`) dentro do diretório `backups/`, garantindo consistência atômica.
 
-### Restauração de Base de Dados
+### Agendamento de Backup Automático no Servidor (Cron)
+Para configurar a rotina diária automática às 23:00 com expurgo automático de arquivos com mais de 30 dias:
+```bash
+./scripts/setup-cron-backup.sh
+```
+Para verificar o agendamento ativo:
+```bash
+./scripts/setup-cron-backup.sh --show
+```
+
+### Inicialização de Base Limpa (Instalação Nova do Zero)
+Se você não possui um backup anterior para restaurar e está iniciando um e-SUS novo:
+```bash
+./scripts/init-new-db.sh
+```
+Este comando executa o `migrador.jar` oficial contra o PostgreSQL, criando todas as 1.200 tabelas e sementes do sistema.
+
+### Restauração de Base de Dados Existente
 ```bash
 ./scripts/restore.sh backups/esus_backup_YYYYMMDD_HHMMSS.backup
 ```

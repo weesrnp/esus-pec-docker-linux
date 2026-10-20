@@ -85,3 +85,8 @@ services:
 networks:
   esus-net:
     driver: bridge
+    # Sub-rede fixa reservada para evitar colisão com faixas de rede privada
+    # comumente utilizadas em VPNs (WireGuard/OpenVPN) e enlaces municipais (10/8, 172.16/12 e 192.168/16).
+    ipam:
+      config:
+        - subnet: 198.18.200.0/24
