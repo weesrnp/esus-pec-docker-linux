@@ -49,13 +49,17 @@ load_env() {
 # Usado só pelo trocar-senhas.sh, que existe justamente para trocar senhas fracas.
 load_env_sem_checar_senhas() {
   [ -f "$ENV_FILE" ] || die "Arquivo .env não encontrado em ${PROJECT_ROOT}. Rode ./scripts/gerar-env.sh"
-  local line key
+  local line key name
+  # Como no Compose: variável que já veio exportada do ambiente vale mais que o
+  # arquivo; entre linhas repetidas do arquivo, vale a última.
+  local -A from_env=()
+  while IFS= read -r name; do from_env["$name"]=1; done < <(compgen -e)
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%$'\r'}"
     [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
     [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]] || continue
     key="${BASH_REMATCH[2]}"
-    if [ -z "${!key+x}" ]; then
+    if [ -z "${from_env[$key]:-}" ]; then
       printf -v "$key" '%s' "$(env_value "${BASH_REMATCH[3]}")"
     fi
   done < "$ENV_FILE"
