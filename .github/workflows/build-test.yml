@@ -79,8 +79,10 @@ jobs:
           # Banco no estilo PostgreSQL 9.6 (CREATE em public para todos): o SQL precisa revogar
           docker exec esus-db psql -U postgres -d esus -c 'grant create on schema public to public'
           docker exec -i -e ESUS_LEITURA_PASSWORD esus-db psql -v ON_ERROR_STOP=1 -U postgres -d esus -f - < sql/esus-leitura.sql
-          docker exec -e PGPASSWORD="$ESUS_LEITURA_PASSWORD" esus-db psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U esus_leitura -d esus \
-            -c 'set default_transaction_read_only=off' -c 'create table public.z(i int)' 2>&1 | grep -q 'permission denied'
+          # Sem pipe: o Actions roda com pipefail e o código 1 do psql é o resultado esperado
+          OUT="$(docker exec -e PGPASSWORD="$ESUS_LEITURA_PASSWORD" esus-db psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U esus_leitura -d esus \
+            -c 'set default_transaction_read_only=off' -c 'create table public.z(i int)' 2>&1 || true)"
+          grep -q 'permission denied' <<< "$OUT"
           # A senha antiga que ficou no histórico do repositório não pode valer
           if docker exec -e PGPASSWORD=esus_leitura_segura_2026 esus-db psql -h 127.0.0.1 -U esus_leitura -d esus -c 'select 1' 2>/dev/null; then
             echo "senha antiga aceita"; exit 1

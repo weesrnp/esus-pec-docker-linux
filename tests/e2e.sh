@@ -27,8 +27,10 @@ leitura_err() { # stderr de comandos do esus_leitura (um -c por argumento)
   docker exec -e PGPASSWORD="$pw" esus-db psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U esus_leitura -d esus "${args[@]}" 2>&1 >/dev/null
 }
 expect_denied() { # $1 = nome do teste; demais = como em leitura_err
-  local name="$1"; shift
-  if leitura_err "$@" | grep -q 'permission denied'; then ok "$name"; else bad "$name"; fi
+  local name="$1" out; shift
+  # Sem pipe: com pipefail, o código 1 do psql (o erro esperado) faria o teste falhar.
+  out="$(leitura_err "$@")"
+  if grep -q 'permission denied' <<< "$out"; then ok "$name"; else bad "$name"; echo "    saída: ${out}"; fi
 }
 leitura_q() {
   docker exec -e PGPASSWORD="$1" esus-db psql -h 127.0.0.1 -U esus_leitura -d esus -tAc "$2" 2>/dev/null | tr -d '\r'
