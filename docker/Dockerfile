@@ -1,12 +1,11 @@
 # ==============================================================================
-# e-SUS APS PEC em Docker (Linux) - Multi-Stage Dockerfile Oficial
+# e-SUS APS PEC em Docker (Linux)
 # ==============================================================================
-# Abordagem de Engenharia Reversa: Extração direta dos payloads JAR da camada
-# 'container/', dispensando mocks de systemd, wrappers de ps ou instalador IzPack.
+# Build multi-stage para descompactação e execução do PEC em contêiner Linux.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Estágio 1: Extrator (Descompactador do Pacote Oficial)
+# Estágio 1: Extração dos pacotes do instalador oficial
 # ------------------------------------------------------------------------------
 FROM alpine:3.20 AS builder
 
@@ -18,7 +17,7 @@ WORKDIR /build
 ARG PEC_JAR
 ARG DOWNLOAD_URL
 
-# Script de extração resiliente: suporta arquivo local ou download direto
+# Suporta arquivo local ou download direto
 COPY . /src/
 RUN if [ -n "${PEC_JAR}" ] && [ -f "/src/${PEC_JAR}" ]; then \
         echo "==> Usando instalador local: ${PEC_JAR}"; \
@@ -27,10 +26,10 @@ RUN if [ -n "${PEC_JAR}" ] && [ -f "/src/${PEC_JAR}" ]; then \
         echo "==> Baixando instalador oficial de: ${DOWNLOAD_URL}"; \
         curl -fsSL "${DOWNLOAD_URL}" -o /tmp/installer.jar; \
     else \
-        # Tenta localizar qualquer arquivo .jar do instalador na raiz do contexto
+        # Localiza arquivo instalador na raiz do contexto
         INSTALLER=$(find /src -maxdepth 2 -name "*eSUS*PEC*.jar" | head -n 1); \
         if [ -n "$INSTALLER" ]; then \
-            echo "==> Instalador localizado automaticamente: $INSTALLER"; \
+            echo "==> Instalador localizado: $INSTALLER"; \
             cp "$INSTALLER" /tmp/installer.jar; \
         else \
             echo "ERRO: Nenhum arquivo instalador e-SUS PEC .jar encontrado no contexto." >&2; \
@@ -38,19 +37,19 @@ RUN if [ -n "${PEC_JAR}" ] && [ -f "/src/${PEC_JAR}" ]; then \
             exit 1; \
         fi; \
     fi && \
-    echo "==> Extraindo pacotes internos do container oficial..." && \
+    echo "==> Extraindo componentes da aplicação..." && \
     unzip -q /tmp/installer.jar "container/webserver/*" "container/database/*" -d /build/ && \
     rm -f /tmp/installer.jar
 
 # ------------------------------------------------------------------------------
-# Estágio 2: Runtime Final de Execução
+# Estágio 2: Runtime da aplicação
 # ------------------------------------------------------------------------------
 FROM eclipse-temurin:17-jre-jammy AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/Sao_Paulo
 
-# Dependências de sistema: fontes para geração de receitas/PDFs e cliente PostgreSQL
+# Dependências de sistema: fontes para relatórios clínicos e cliente PostgreSQL
 RUN apt-get update && \
     echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
     apt-get install -y --no-install-recommends \
@@ -63,20 +62,19 @@ RUN apt-get update && \
     fc-cache -fv && \
     rm -rf /var/lib/apt/lists/*
 
-# Diretórios de trabalho do PEC
+# Diretórios de trabalho da aplicação
 RUN mkdir -p /opt/pec/webserver /opt/pec/database /opt/pec/config /opt/pec/chaves /opt/pec/backups
 
 WORKDIR /opt/pec/webserver
 
-# Cópia seletiva dos artefatos descompactados do Estágio 1
+# Cópia dos artefatos extraídos no Estágio 1
 COPY --from=builder /build/container/webserver/ /opt/pec/webserver/
 COPY --from=builder /build/container/database/ /opt/pec/database/
 
-# Script de entrada inteligente
+# Script de inicialização
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Portas de serviço (HTTP e HTTPS)
 EXPOSE 8080 443
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

@@ -1,103 +1,101 @@
 # e-SUS APS PEC em Docker (Linux)
 
-[![Docker Compose](https://img.shields.io/badge/docker--compose-v2-blue?logo=docker)](https://docs.docker.com/compose/)
-[![Java](https://img.shields.io/badge/OpenJDK-17-orange?logo=openjdk)](https://adoptium.net/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%7C%209.6-blue?logo=postgresql)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-
-Estrutura Docker de alto desempenho e arquitetura limpa para executar o **e-SUS APS PEC (Prontuário Eletrônico do Cidadão)** em servidores Linux.
+Ambiente Docker para instalação e execução do **e-SUS APS PEC (Prontuário Eletrônico do Cidadão)** em servidores Linux.
 
 ---
 
-## 🎯 Destaques Arquiteturais
+## Características
 
-- **Zero Mocks de Systemd:** Não utiliza gambiarras de sobrescrita de `/bin/ps` ou `/bin/systemctl`. Extrai diretamente os pacotes Spring Boot (`pec-bundle.jar`) e utilitários oficiais em um build multi-stage limpo.
-- **Imagem Leve (~250 MB):** Runtime baseado na imagem oficial `eclipse-temurin:17-jre`, com fontes Microsoft Core Fonts (`msttcorefonts`) integradas para geração perfeita de receitas e relatórios em PDF.
-- **Banco de Dados Afinado (DW 1.200 tabelas):** Parâmetros de PostgreSQL (`shared_buffers`, `effective_cache_size`, `work_mem`) otimizados para o modelo Star Schema da Atenção Primária à Saúde.
-- **Conformidade LGPD:** Script de inicialização automática do usuário `esus_leitura` com privilégios estritamente `READ ONLY` e timeout de segurança para BI, relatórios e auditorias.
-- **Gestão Segura de SSL:** Compatível com o utilitário oficial `certmgr.jar` para autogestão de certificados HTTPS na porta 443.
+- **Build multi-stage:** O Dockerfile extrai os componentes necessários (`pec-bundle.jar`, `certmgr.jar`) diretamente do instalador oficial em tempo de build, mantendo a imagem final limpa e enxuta.
+- **Imagem base oficial:** Utiliza `eclipse-temurin:17-jre-jammy` com fontes `msttcorefonts` instaladas para correta renderização de relatórios e impressões clínicas em PDF.
+- **Configuração de banco:** Parâmetros do PostgreSQL ajustados para atender a volumetria e complexidade das tabelas do Data Warehouse da Atenção Primária.
+- **Usuário de consulta (LGPD):** Criação automática de usuário com permissões de somente leitura (`esus_leitura`) e limite de tempo por consulta, voltado para integração com painéis e relatórios externos.
+- **Suporte a HTTPS:** Compatível com o utilitário `certmgr.jar` para uso de certificados na porta 443.
 
 ---
 
-## 🚀 Início Rápido
+## Requisitos
 
-### 1. Pré-Requisitos
-- [Docker Engine](https://docs.docker.com/engine/install/) (v24+)
-- [Docker Compose](https://docs.docker.com/compose/install/) (v2+)
+- Docker Engine 24.0 ou superior
+- Docker Compose v2 instalado
 
-### 2. Configuração de Ambiente
-Clone o repositório e crie o seu arquivo de ambiente:
+---
+
+## Instalação e uso
+
+### 1. Clonar o repositório e preparar variáveis
 ```bash
 git clone https://github.com/SEU_USUARIO/esus-pec-docker-linux.git
 cd esus-pec-docker-linux
 cp .env.example .env
 ```
-Edite o arquivo `.env` para ajustar senhas e portas conforme seu ambiente.
+Ajuste as credenciais e portas no arquivo `.env` conforme a topologia da sua rede.
 
-### 3. Obtenção do Pacote Oficial
-Coloque o arquivo instalador oficial (`eSUS-AB-PEC-*-Linux64.jar`) na raiz do repositório ou use o script de download automático:
+### 2. Baixar o instalador oficial do PEC
+Coloque o arquivo `.jar` do instalador Linux na raiz do diretório do projeto ou utilize o script auxiliar:
 ```bash
 chmod +x scripts/*.sh docker/*.sh
 ./scripts/get-latest-pec.sh --download
 ```
 
-### 4. Build e Inicialização
+### 3. Subir os contêineres
 ```bash
 docker compose build
 docker compose up -d
 ```
-Acesse a aplicação no navegador em: `http://localhost:8080` (ou IP do seu servidor).
+A aplicação estará disponível em `http://localhost:8080` (ou no IP configurado no servidor).
 
 ---
 
-## 📂 Estrutura de Arquivos
+## Estrutura do projeto
 
 ```
 esus-pec-docker-linux/
 ├── docker/
-│   ├── Dockerfile         # Multi-stage: Extração oficial + Runtime Temurin 17 JRE
-│   └── entrypoint.sh      # Inicialização com JAVA_OPTS e checagem de banco
+│   ├── Dockerfile         # Definição multi-stage da imagem da aplicação
+│   └── entrypoint.sh      # Script de inicialização da JVM e checagem de dependências
 ├── sql/
-│   └── 01-init-esus-leitura.sql # Provisionamento da conta somente leitura (LGPD)
+│   └── 01-init-esus-leitura.sql # Criação do usuário de leitura no banco
 ├── scripts/
-│   ├── backup.sh          # Rotina de backup consistente via pg_dump
-│   ├── restore.sh         # Restauração com pg_restore e validação
-│   └── get-latest-pec.sh  # Script de download da versão mais recente do SISAPS
+│   ├── backup.sh          # Rotina de dump do banco de dados
+│   ├── restore.sh         # Script de restauração de base com pg_restore
+│   └── get-latest-pec.sh  # Consulta e download da versão atual no portal SISAPS
 ├── docs/
-│   └── POP-MIGRACAO.md    # Procedimento Operacional Padrão de migração Windows -> Linux
-├── compose.yml            # Orquestração do banco e-SUS e da aplicação
-├── .env.example           # Modelo sanitizado de variáveis
-└── .gitignore             # Bloqueio estrito de dumps, senhas e certificados
+│   └── POP-MIGRACAO.md    # Roteiro de migração de ambientes Windows para Linux
+├── compose.yml            # Definição dos serviços esus-db e esus-pec
+├── .env.example           # Modelo de variáveis de ambiente
+└── .gitignore             # Regras de exclusão de dados sensíveis e binários
 ```
 
 ---
 
-## 💾 Rotinas Operacionais
+## Rotinas operacionais
 
-### Backup Diário do Banco de Dados
+### Gerar backup da base
 ```bash
 ./scripts/backup.sh
 ```
-Gera um arquivo consistente `.backup` na pasta `backups/` com data e hora.
+O script gera um arquivo comprimido (`.backup`) dentro do diretório `backups/`.
 
-### Restauração de Backup
+### Restaurar base existente
 ```bash
-./scripts/restore.sh backups/esus_backup_YYYYMMDD_HHMMSS.backup
+./scripts/restore.sh backups/arquivo_de_backup.backup
 ```
 
-### Migração de Servidor Windows para Linux
-Consulte o guia passo a passo em [docs/POP-MIGRACAO.md](docs/POP-MIGRACAO.md).
+### Migração de ambiente legado
+Caso esteja migrando uma instalação existente do e-SUS PEC que roda em Windows Server, siga o roteiro detalhado em [docs/POP-MIGRACAO.md](docs/POP-MIGRACAO.md).
 
 ---
 
-## 🔒 Segurança e LGPD
+## Segurança
 
-- As credenciais declaradas em `.env` jamais são commitadas (protegidas via `.gitignore`).
-- Dumps de banco contendo dados nominais de cidadãos (`.backup`) são estritamente ignorados pelo versionamento.
-- Recomenda-se a geração de senhas aleatórias de no mínimo 24 caracteres para as variáveis de banco de dados.
+- Arquivos de backup, credenciais locais (`.env`), certificados digitais (`.p12`) e chaves privadas estão bloqueados no `.gitignore`.
+- O banco de dados nunca deve ser exposto diretamente para a internet sem regras de firewall ou VPN.
+- Mantenha senhas com complexidade adequada para os usuários administrativos do banco.
 
 ---
 
-## 📄 Licença
+## Licença
 
-Distribuído sob licença MIT. O e-SUS APS PEC é software público do Ministério da Saúde do Brasil. Este projeto fornece exclusivamente a automação e containerização do ambiente de execução.
+Distribuído sob licença MIT. Consulte o arquivo [LICENSE](LICENSE) para mais detalhes.  
+O e-SUS APS PEC é desenvolvido pelo Laboratório Bridge (UFSC) e mantido pelo Ministério da Saúde.
