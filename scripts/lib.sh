@@ -70,12 +70,36 @@ load_env_sem_checar_senhas() {
 }
 
 # Mesma regra do entrypoint do banco: nada vazio, curto ou com o valor de exemplo.
+# Recusa senha vazia ou o valor de exemplo publicado no repositório. Senha
+# própria curta só gera aviso: instalações antigas continuam funcionando até
+# rodarem o trocar-senhas.sh.
 check_password() {
   local name="$1" value="$2"
   [ -n "$value" ] || die "${name} vazia no .env (rode ./scripts/gerar-env.sh)"
-  if [ "${#value}" -lt 16 ] || [[ "$value" == altere_* ]]; then
-    die "${name} fraca ou com o valor de exemplo (mínimo 16 caracteres). Use ./scripts/trocar-senhas.sh"
+  if [[ "$value" == altere_* ]]; then
+    die "${name} ainda é o valor de exemplo publicado no repositório. Use ./scripts/trocar-senhas.sh"
   fi
+  if [ "${#value}" -lt 16 ]; then
+    warn "${name} tem menos de 16 caracteres. Recomendado: ./scripts/trocar-senhas.sh"
+  fi
+  return 0
+}
+
+# Compatibilidade: até 2026-10 o README mandava pôr o instalador na raiz do
+# projeto. O build agora só lê instalador/ (ver .dockerignore).
+mover_jar_da_raiz() {
+  local f dest
+  for f in "${PROJECT_ROOT}"/eSUS-AB-PEC-*-Linux64.jar; do
+    [ -f "$f" ] || continue
+    mkdir -p "${PROJECT_ROOT}/instalador"
+    dest="${PROJECT_ROOT}/instalador/$(basename "$f")"
+    if [ -e "$dest" ]; then
+      warn "$(basename "$f") está na raiz e também em instalador/. Apague o da raiz."
+    else
+      mv "$f" "$dest"
+      log "$(basename "$f") movido da raiz para instalador/."
+    fi
+  done
 }
 
 container_running() {

@@ -25,9 +25,14 @@ cd "$PEC_HOME"
 : "${SPRING_DATASOURCE_PASSWORD:?defina SPRING_DATASOURCE_PASSWORD}"
 # O pacote oficial grava o driver no application.properties; aqui ele vem do ambiente.
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME="${SPRING_DATASOURCE_DRIVER_CLASS_NAME:-org.postgresql.Driver}"
-# O ":?" do compose só barra senha vazia; aqui também barra a de exemplo e as curtas.
-if [ "${#SPRING_DATASOURCE_PASSWORD}" -lt 16 ] || [[ "$SPRING_DATASOURCE_PASSWORD" == altere_* ]]; then
-  die "POSTGRES_PASSWORD fraca ou com o valor de exemplo. Rode ./scripts/gerar-env.sh (instalação nova) ou ./scripts/trocar-senhas.sh."
+# O ":?" do compose só barra senha vazia. A senha de exemplo publicada no
+# repositório é recusada; senha própria curta só gera aviso, para não derrubar
+# quem atualiza o repositório com uma senha antiga que funciona.
+if [[ "$SPRING_DATASOURCE_PASSWORD" == altere_* ]]; then
+  die "POSTGRES_PASSWORD ainda é o valor de exemplo publicado no repositório. Rode ./scripts/trocar-senhas.sh."
+fi
+if [ "${#SPRING_DATASOURCE_PASSWORD}" -lt 16 ]; then
+  log "AVISO: POSTGRES_PASSWORD com menos de 16 caracteres. Recomendado: ./scripts/trocar-senhas.sh."
 fi
 
 # ------------------------------------------------------------------------------
@@ -100,17 +105,24 @@ if [ "${PEC_SSL:-0}" = "1" ]; then
   if [ ! -f "$SSL_PROPS" ]; then
     [ -n "${PEC_SSL_DOMAIN:-}" ] \
       || die "PEC_SSL=1, mas não há certificado ativado. Defina PEC_SSL_DOMAIN (domínio público apontando para este servidor, com as portas 80 e 443 liberadas)."
-    log "Ativando HTTPS para ${PEC_SSL_DOMAIN} (porta ${PEC_SSL_PORT:-443})..."
-    if ! (cd "$CERTMGR_DIR" && "${RUN_AS[@]}" java -jar certmgr.jar --enable \
-        --domain="$PEC_SSL_DOMAIN" --port="${PEC_SSL_PORT:-443}"); then
-      # Sem a pausa, o restart automático repetiria a emissão em loop e
-      # estouraria o limite de validações falhas da autoridade certificadora.
-      RETRY="${PEC_SSL_RETRY_DELAY:-600}"
-      log "ERRO: certmgr --enable falhou. Confira o DNS do domínio e as portas 80/443 no roteador."
-      log "Nova tentativa em ${RETRY}s (PEC_SSL_RETRY_DELAY). Para subir sem HTTPS, use PEC_SSL=0."
-      sleep "$RETRY"
+    # Sem a pausa, o restart automático repetiria a tentativa em loop e
+    # estouraria o limite de validações falhas da autoridade certificadora.
+    ssl_fail() {
+      local retry="${PEC_SSL_RETRY_DELAY:-600}"
+      log "ERRO: $1"
+      log "Nova tentativa em ${retry}s (PEC_SSL_RETRY_DELAY). Para subir sem HTTPS, use PEC_SSL=0."
+      sleep "$retry"
       exit 1
-    fi
+    }
+    CERTMGR_ARGS=(--enable --domain="$PEC_SSL_DOMAIN" --port="${PEC_SSL_PORT:-443}")
+    # 1º --verify (como o instalador oficial): confere DNS e portas sem emitir nada.
+    log "Verificando se o certificado pode ser emitido para ${PEC_SSL_DOMAIN}..."
+    (cd "$CERTMGR_DIR" && "${RUN_AS[@]}" java -jar certmgr.jar "${CERTMGR_ARGS[@]}" --verify) \
+      || ssl_fail "certmgr --verify recusou ${PEC_SSL_DOMAIN}. Confira se o domínio aponta para este servidor e se as portas 80 e 443 chegam ao container."
+    log "Ativando HTTPS para ${PEC_SSL_DOMAIN} (porta ${PEC_SSL_PORT:-443})..."
+    (cd "$CERTMGR_DIR" && "${RUN_AS[@]}" java -jar certmgr.jar "${CERTMGR_ARGS[@]}") \
+      || ssl_fail "certmgr --enable falhou depois da verificação. Veja as mensagens do certmgr acima."
+    [ -f "$SSL_PROPS" ] || ssl_fail "certmgr --enable terminou, mas não criou ${SSL_PROPS}."
   fi
   export SPRING_CONFIG_ADDITIONAL_LOCATION="$SSL_PROPS"
   log "Renovando certificado (certmgr --renew)..."

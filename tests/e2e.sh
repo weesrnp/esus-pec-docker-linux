@@ -222,6 +222,75 @@ rm -f instalador/eSUS-AB-PEC-0.0.0-Linux64.jar
 step "16. get-latest-pec.sh (consulta ao portal oficial)"
 if ./scripts/get-latest-pec.sh; then ok "localiza a versão mais recente no SISAPS"; else bad "localiza a versão mais recente no SISAPS"; fi
 
+step "17. Compatibilidade: instalador na raiz e LAN_IP (quem já usa o repositório)"
+echo "nao sou o instalador" > eSUS-AB-PEC-9.9.9-Linux64.jar
+bash -c 'source scripts/lib.sh; mover_jar_da_raiz' >/dev/null
+check ".jar na raiz é movido para instalador/" bash -c '[ ! -f eSUS-AB-PEC-9.9.9-Linux64.jar ] && [ -f instalador/eSUS-AB-PEC-9.9.9-Linux64.jar ]'
+rm -f instalador/eSUS-AB-PEC-9.9.9-Linux64.jar
+cp .env .env.antes17
+# .env no formato antigo: LAN_IP e nenhum POSTGRES_BIND_IP
+sed -i '/^POSTGRES_BIND_IP=/d' .env
+echo 'LAN_IP=192.168.0.10' >> .env
+check "doctor avisa que o banco não segue mais o LAN_IP" bash -c './scripts/doctor.sh 2>&1 | grep -q "LAN_IP=192.168.0.10"'
+mv .env.antes17 .env
+
+step "18. HTTPS: domínio que não resolve (falha controlada, sem loop de emissão)"
+docker rm -f esus-pec-ssl >/dev/null 2>&1
+docker run -d --name esus-pec-ssl --network esus-pec_esus-net \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://esus-db:5432/esus -e SPRING_DATASOURCE_USERNAME=postgres \
+  -e SPRING_DATASOURCE_PASSWORD="$(envv POSTGRES_PASSWORD)" -e DB_HOST=esus-db -e DB_NAME=esus \
+  -e PEC_SSL=1 -e PEC_SSL_DOMAIN=dominio-inexistente.invalid -e PEC_SSL_RETRY_DELAY=3 \
+  "esus-pec-docker:${VERSION}" >/dev/null
+for _ in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Running}}' esus-pec-ssl)" = "false" ] && break; sleep 2; done
+SSL_LOG="$(docker logs esus-pec-ssl 2>&1)"
+check "certmgr --verify recusa o domínio antes de emitir" grep -q "Domínio inválido ou inacessível" <<< "$SSL_LOG"
+check "entrypoint explica o erro e espera antes de nova tentativa" grep -q "Nova tentativa em 3s" <<< "$SSL_LOG"
+check "container sai com erro (não sobe sem HTTPS por engano)" test "$(docker inspect -f '{{.State.ExitCode}}' esus-pec-ssl)" = "1"
+check "nenhuma emissão tentada (ssl.properties não criado)" \
+  bash -c '! docker cp esus-pec-ssl:/opt/pec/webserver/certmgr/config/ssl.properties /tmp/ssl.properties.e2e 2>/dev/null'
+docker rm -f esus-pec-ssl >/dev/null 2>&1
+
+step "19. Migração do Windows: dump real de PostgreSQL 9.6"
+docker rm -f pg96 >/dev/null 2>&1
+docker run -d --name pg96 --network esus-pec_esus-net -e POSTGRES_PASSWORD=senha96teste_e2e_ok \
+  -e TZ=America/Sao_Paulo postgres:9.6-alpine >/dev/null
+for _ in $(seq 1 60); do docker exec pg96 pg_isready -q -h 127.0.0.1 2>/dev/null && break; sleep 2; done
+docker exec pg96 createdb -U postgres -E UTF8 -T template0 esus
+T0=$(date +%s)
+docker compose run --rm --no-deps -T --entrypoint sh esus-pec -c \
+  'java -Xmx2048M -jar /opt/pec/database/migrador.jar -url=jdbc:postgresql://pg96:5432/esus -username=postgres -password=senha96teste_e2e_ok' \
+  > /tmp/migr96.log 2>&1
+echo "  migrador no 9.6: $(( $(date +%s) - T0 ))s"
+T96="$(docker exec pg96 psql -U postgres -d esus -tAc "select count(*) from pg_tables where schemaname='public'" | tr -d '\r')"
+check "migrador 5.5.28 cria o banco no PostgreSQL 9.6 (${T96} tabelas)" test "${T96:-0}" -ge 1000
+docker exec pg96 psql -U postgres -d esus -qc "create table public.marcador_windows(nome text); insert into public.marcador_windows values ('Zélia Conceição Araújo')"
+docker exec pg96 pg_dump -U postgres -d esus -Fc > /tmp/esus96.backup
+check "pg_dump 9.6 gerou o arquivo" test -s /tmp/esus96.backup
+check "restore.sh aceita o dump 9.6" ./scripts/restore.sh --yes --drop-old /tmp/esus96.backup
+check "acentos preservados (UTF-8 do 9.6 para o 16)" \
+  test "$(psqlq "select nome from marcador_windows")" = "Zélia Conceição Araújo"
+check "tabelas do 9.6 restauradas (>= 1000)" test "$(psqlq "select count(*) from pg_tables where schemaname='public'")" -ge 1000
+check "PEC healthy no banco vindo do 9.6" wait_healthy esus-pec 900
+check "PEC responde no banco vindo do 9.6" test "$(api_version)" = "$VERSION"
+check "leitura lê o banco vindo do 9.6" test "$(leitura_q "$(envv ESUS_LEITURA_PASSWORD)" 'select count(*) from marcador_windows')" = "1"
+docker rm -f pg96 >/dev/null 2>&1
+
+step "20. Quem atualiza o repositório com a senha de exemplo no .env (não pode travar)"
+OLD_EX_PG="altere_essa_senha_super_secreta_aqui_123"
+psqlq "alter role postgres password '${OLD_EX_PG}'" >/dev/null
+cp .env .env.antes20
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${OLD_EX_PG}/; s/^ESUS_LEITURA_PASSWORD=.*/ESUS_LEITURA_PASSWORD=altere_essa_senha_de_leitura_aqui_456/" .env
+docker compose up -d --force-recreate esus-db >/dev/null 2>&1
+check "banco existente sobe mesmo com a senha de exemplo (só avisa)" wait_healthy esus-db 120
+check "banco avisa para trocar a senha" bash -c 'docker logs esus-db 2>&1 | grep -q "AVISO: POSTGRES_PASSWORD"'
+docker compose up -d --force-recreate --no-deps esus-pec >/dev/null 2>&1
+sleep 15
+check "PEC recusa a senha de exemplo publicada" bash -c 'docker logs esus-pec 2>&1 | grep -q "valor de exemplo publicado"'
+check "trocar-senhas.sh resolve a instalação antiga" ./scripts/trocar-senhas.sh --yes
+check "senha nova não é a de exemplo" bash -c '! grep -q "^POSTGRES_PASSWORD=altere_" .env'
+check "PEC healthy depois da troca" wait_healthy esus-pec 900
+rm -f .env.antes20
+
 echo
 echo "=================== RESULTADO ==================="
 printf '%s\n' "${RESULTS[@]}"

@@ -31,10 +31,14 @@ SET log_min_duration_statement = -1;
   SELECT 'ESUS_LEITURA_PASSWORD ausente'::int;
 \endif
 
-SELECT (length(:'leitura_pwd') < 16 OR :'leitura_pwd' LIKE 'altere_%') AS senha_fraca \gset
-\if :senha_fraca
-  \echo 'ERRO: ESUS_LEITURA_PASSWORD fraca ou ainda com o valor de exemplo (mínimo 16 caracteres).'
-  SELECT 'ESUS_LEITURA_PASSWORD fraca'::int;
+SELECT (:'leitura_pwd' = '' OR :'leitura_pwd' LIKE 'altere\_%') AS senha_exemplo,
+       length(:'leitura_pwd') < 16 AS senha_curta \gset
+\if :senha_exemplo
+  \echo 'ERRO: ESUS_LEITURA_PASSWORD vazia ou com o valor de exemplo publicado no repositório.'
+  SELECT 'ESUS_LEITURA_PASSWORD de exemplo'::int;
+\endif
+\if :senha_curta
+  \echo 'AVISO: ESUS_LEITURA_PASSWORD com menos de 16 caracteres. Recomendado: ./scripts/trocar-senhas.sh --leitura'
 \endif
 
 -- O usuário de leitura não pode ser um papel administrativo: o ALTER ROLE
