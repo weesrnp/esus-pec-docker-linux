@@ -29,6 +29,11 @@ backups/
 *.sql.gz
 *.sql.bz2
 
+# Dossiês Técnicos e Documentação Interna (Não subir ao GitHub)
+_dossie_interno/
+_docs_internos/
+DOSSIE_*.md
+
 # Binários Pesados e Instaladores do DATASUS (Não versionar no Git!)
 *.jar
 *.war
