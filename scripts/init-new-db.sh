@@ -36,6 +36,7 @@ if [ "$EXISTING" -gt 0 ]; then
   die "O banco '${POSTGRES_DB}' já tem ${EXISTING} tabelas. Para atualizar a versão use ./scripts/atualizar-pec.sh; para trocar a base use ./scripts/restore.sh."
 fi
 
+mover_jar_da_raiz
 if ! docker image inspect "esus-pec-docker:${PEC_IMAGE_TAG:-local}" >/dev/null 2>&1; then
   log "Imagem do PEC não encontrada. Construindo..."
   docker compose build esus-pec

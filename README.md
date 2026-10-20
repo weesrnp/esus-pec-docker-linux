@@ -115,7 +115,7 @@ Arquivos com mais de `RETENTION_DAYS` dias (padrão 30) são apagados. O script 
 
 - `gerar-env.sh` cria senhas de 192 bits. O `.env` não vai para o git (`.gitignore`) nem para o contexto de build (`.dockerignore`).
 - Editar a senha no `.env` **não muda** a senha que já está gravada no PostgreSQL. Para trocar, use `trocar-senhas.sh`: ele altera no banco, atualiza o `.env` (guarda cópia em `.env.bak-<data>`) e recria os containers.
-- O banco e o PEC recusam subir com senha vazia, curta (menos de 16 caracteres) ou com o valor de exemplo.
+- Um banco novo não é criado com senha vazia, curta (menos de 16 caracteres) ou com o valor de exemplo. Num banco que já existe, a senha que vale é a gravada no PostgreSQL: o container sobe e avisa, para que o `trocar-senhas.sh` possa ser usado. O PEC e os scripts recusam o valor de exemplo publicado no repositório e só avisam sobre senhas próprias curtas.
 - As senhas vão para os containers por variável de ambiente, visíveis para quem tem acesso ao Docker do servidor (`docker inspect`). Esse acesso já equivale a root no host; restrinja o grupo `docker`.
 - O migrador oficial só aceita a senha como argumento. Os scripts passam esse argumento por um arquivo de argumentos do Java, para que ele não apareça no `ps` do host durante a migração.
 
@@ -131,7 +131,11 @@ docker compose up -d
 
 Se a emissão falhar, o container espera 10 minutos (`PEC_SSL_RETRY_DELAY`) antes de tentar de novo, para não estourar o limite de tentativas da autoridade certificadora.
 
-O certificado é renovado a cada reinício do container, como no `standalone.sh` oficial. Se a renovação falhar, o log mostra `ERRO: certmgr --renew falhou` e o PEC sobe com o certificado atual. A ativação (`certmgr --enable`) não foi testada de ponta a ponta neste projeto, porque depende de um domínio público. Uma alternativa sem certmgr é um proxy TLS (Caddy, nginx) na frente da porta 8080.
+Na primeira subida, o entrypoint roda `certmgr --enable --verify` (como o instalador oficial). Ele confere DNS e portas sem emitir nada; só se passar vem o `--enable`. Se o domínio não resolver, o log mostra `Domínio inválido ou inacessível` e o container espera `PEC_SSL_RETRY_DELAY` antes de sair, sem tentar emitir.
+
+O certificado é renovado a cada reinício do container, como no `standalone.sh` oficial. Se a renovação falhar, o log mostra `ERRO: certmgr --renew falhou` e o PEC sobe com o certificado atual.
+
+O teste automático cobre o caminho de recusa (domínio que não resolve). A emissão real depende de um domínio público e não roda no teste. Uma alternativa sem certmgr é um proxy TLS (Caddy, nginx) na frente da porta 8080.
 
 ---
 

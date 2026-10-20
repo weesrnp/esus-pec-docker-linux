@@ -71,8 +71,10 @@ if [ -f "$ENV_FILE" ]; then
     val="$(env_get "$key")"
     if [ -z "$val" ]; then
       falha "${key} vazia no .env (rode ./scripts/gerar-env.sh)"
-    elif [[ "$val" == altere_* ]] || [ "${#val}" -lt 16 ]; then
-      falha "${key} com valor de exemplo ou curta demais (mínimo 16). Use ./scripts/gerar-env.sh ou ./scripts/trocar-senhas.sh"
+    elif [[ "$val" == altere_* ]]; then
+      falha "${key} ainda é o valor de exemplo publicado no repositório. Use ./scripts/trocar-senhas.sh (instalação existente) ou ./scripts/gerar-env.sh (nova)"
+    elif [ "${#val}" -lt 16 ]; then
+      aviso "${key} com ${#val} caracteres (recomendado: 16 ou mais). Use ./scripts/trocar-senhas.sh"
     else
       ok "${key} definida (${#val} caracteres)"
     fi
@@ -165,6 +167,10 @@ if [ -n "$(env_get PEC_SSL_DOMAIN)" ]; then
   if [ -z "$PEC_BIND" ] || [ "$PEC_BIND" = "127.0.0.1" ]; then
     falha "PEC_SSL_DOMAIN definido, mas PEC_BIND_IP=${PEC_BIND:-127.0.0.1}: a validação do domínio (portas 80/443) não chega ao container"
   fi
+fi
+# Compatibilidade: até 2026-10 o LAN_IP publicava também o banco.
+if [ -n "$(env_get LAN_IP)" ] && [ -z "$(env_get POSTGRES_BIND_IP)" ] && [ "$(env_get LAN_IP)" != "127.0.0.1" ]; then
+  aviso "LAN_IP=$(env_get LAN_IP) no .env: o PEC continua nesse IP, mas o banco agora fica só em 127.0.0.1. Se algum BI acessava a porta do banco pela rede, defina POSTGRES_BIND_IP (de preferência com VPN/túnel)."
 fi
 PG_BIND="$(env_get POSTGRES_BIND_IP)"
 if [ -n "$PG_BIND" ] && [ "$PG_BIND" != "127.0.0.1" ]; then

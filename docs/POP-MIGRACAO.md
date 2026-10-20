@@ -44,7 +44,7 @@ Tempo estimado: de 1 a 3 horas, conforme o tamanho do banco. Faça fora do horá
    ```bash
    ./scripts/restore.sh /caminho/eSUS_migracao.backup
    ```
-   Em dumps do PostgreSQL 9.6 podem aparecer avisos sobre `schema "public" already exists` ou `plpgsql`. O script reconhece esses casos e não os trata como falha; qualquer outro erro interrompe a restauração sem mexer no banco em uso.
+   Em dumps do PostgreSQL 9.6 aparecem avisos sobre `schema "public" already exists` ou `plpgsql`. O script reconhece esses casos e não os trata como falha; qualquer outro erro interrompe a restauração sem mexer no banco em uso. Esse caminho é coberto pelo teste automático: banco criado pelo migrador 5.5.28 num PostgreSQL 9.6, `pg_dump` 9.6 e restore no 16. Passa com 1 aviso conhecido, acentos preservados e PEC no ar.
 4. Suba o PEC:
    ```bash
    docker compose up -d
