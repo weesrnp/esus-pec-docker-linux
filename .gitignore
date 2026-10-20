@@ -36,6 +36,7 @@ DOSSIE_*.md
 
 # Binários Pesados e Instaladores do DATASUS (Não versionar no Git!)
 *.jar
+*.jar.sha256
 *.war
 downloads/
 dist/
@@ -60,3 +61,6 @@ stderr.log
 *~
 .DS_Store
 Thumbs.db
+
+# Logs dos testes ponta a ponta
+tests/*.log

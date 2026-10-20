@@ -1,54 +1,93 @@
 # ==============================================================================
-# e-SUS APS PEC em Docker (Linux) - Orquestração Docker Compose Oficial
+# e-SUS APS PEC em Docker (Linux) - Docker Compose
 # ==============================================================================
-# Execução:
-#   1. cp .env.example .env (ajuste as senhas e portas)
-#   2. docker compose build
-#   3. docker compose up -d
+# Primeira instalação:
+#   1. ./scripts/gerar-env.sh            (cria o .env com senhas fortes, modo 600)
+#   2. ./scripts/doctor.sh               (diagnóstico do servidor)
+#   3. docker compose build
+#   4. ./scripts/init-new-db.sh  ou  ./scripts/restore.sh <backup>
+#   5. docker compose up -d
+# HTTPS com o certmgr oficial: docker compose -f compose.yml -f compose.ssl.yml up -d
 # ==============================================================================
 name: esus-pec
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
 services:
   # ----------------------------------------------------------------------------
-  # Banco de Dados PostgreSQL (Otimizado para o Star Schema de 1.200 tabelas)
+  # PostgreSQL
   # ----------------------------------------------------------------------------
   esus-db:
     image: postgres:16-alpine
     container_name: esus-db
     restart: unless-stopped
     shm_size: 1g
-    command: >
-      postgres
-      -c password_encryption=md5
-      -c shared_buffers=2GB
-      -c effective_cache_size=6GB
-      -c maintenance_work_mem=512MB
-      -c work_mem=32MB
-      -c max_connections=200
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=16MB
-      -c random_page_cost=1.1
+    # Recusa subir com senha fraca ou de exemplo antes de inicializar o volume.
+    entrypoint: ["bash", "/esus-sql/db-entrypoint.sh"]
+    # Parâmetros de locale e data iguais aos do postgresql.conf do instalador
+    # oficial (datestyle dmy, busca textual em português, fuso de Brasília).
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - datestyle=iso, dmy
+      - -c
+      - default_text_search_config=pg_catalog.portuguese
+      - -c
+      - timezone=America/Sao_Paulo
+      - -c
+      - log_timezone=America/Sao_Paulo
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-2GB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-6GB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-512MB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-32MB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-200}
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - random_page_cost=1.1
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-esus}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-altere_essa_senha_super_secreta_aqui_123}
-      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (rode scripts/gerar-env.sh)}
+      # Ordenação de nomes em português (Á, É, minúsculas) via ICU.
+      # Só vale na criação do volume; bancos existentes mantêm o locale original.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=pt-BR --auth-host=scram-sha-256"
+      ESUS_LEITURA_USER: ${ESUS_LEITURA_USER:-esus_leitura}
+      ESUS_LEITURA_PASSWORD: ${ESUS_LEITURA_PASSWORD:?defina ESUS_LEITURA_PASSWORD no .env (rode scripts/gerar-env.sh)}
       TZ: ${TZ:-America/Sao_Paulo}
     volumes:
       - ./volumes/pg_data:/var/lib/postgresql/data
-      - ./sql/01-init-esus-leitura.sql:/docker-entrypoint-initdb.d/01-init-esus-leitura.sql:ro
+      - ./sql:/esus-sql:ro
+      - ./sql/01-init-esus-leitura.sh:/docker-entrypoint-initdb.d/01-init-esus-leitura.sh:ro
     ports:
-      - "${LAN_IP:-127.0.0.1}:${POSTGRES_EXTERNAL_PORT:-5433}:5432"
+      # O banco fica no loopback por padrão, mesmo quando o PEC é publicado na LAN.
+      # Atenção: o Docker publica portas por cima do UFW/firewalld.
+      - "${POSTGRES_BIND_IP:-127.0.0.1}:${POSTGRES_EXTERNAL_PORT:-5433}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-esus}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    stop_grace_period: 60s
+    logging: *logging
     networks:
       - esus-net
 
   # ----------------------------------------------------------------------------
-  # Aplicação e-SUS APS PEC (Runtime Spring Boot / Undertow)
+  # e-SUS APS PEC (Spring Boot / Undertow)
   # ----------------------------------------------------------------------------
   esus-pec:
     build:
@@ -56,37 +95,57 @@ services:
       dockerfile: docker/Dockerfile
       args:
         PEC_JAR: ${PEC_JAR_FILE:-}
+        PEC_JAR_SHA256: ${PEC_JAR_SHA256:-}
+    image: esus-pec-docker:${PEC_IMAGE_TAG:-local}
     container_name: esus-pec
     restart: unless-stopped
+    init: true
     depends_on:
       esus-db:
         condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://esus-db:5432/${POSTGRES_DB:-esus}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-altere_essa_senha_super_secreta_aqui_123}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (rode scripts/gerar-env.sh)}
       DB_HOST: esus-db
       DB_PORT: "5432"
-      DB_USER: ${POSTGRES_USER:-postgres}
       DB_NAME: ${POSTGRES_DB:-esus}
       PEC_HEAP: ${PEC_HEAP:-4096M}
+      PEC_JAVA_OPTS_EXTRA: ${PEC_JAVA_OPTS_EXTRA:-}
       PEC_SSL: ${PEC_SSL:-0}
+      PEC_SSL_DOMAIN: ${PEC_SSL_DOMAIN:-}
+      PEC_SSL_PORT: ${PEC_SSL_PORT:-443}
       TZ: ${TZ:-America/Sao_Paulo}
     volumes:
       - ./volumes/pec_config:/opt/pec/webserver/config
       - ./volumes/pec_chaves:/opt/pec/webserver/chaves
       - ./volumes/pec_certmgr:/opt/pec/webserver/certmgr/config
+      - ./volumes/pec_logs:/opt/pec/webserver/logs
     ports:
-      - "${LAN_IP:-127.0.0.1}:${PEC_HTTP_PORT:-8080}:8080"
-      - "${LAN_IP:-127.0.0.1}:${PEC_HTTPS_PORT:-443}:443"
+      - "${PEC_BIND_IP:-${LAN_IP:-127.0.0.1}}:${PEC_HTTP_PORT:-8080}:8080"
+      - "${PEC_BIND_IP:-${LAN_IP:-127.0.0.1}}:${PEC_HTTPS_PORT:-443}:443"
+    # Mesmo limite do e-SUS-PEC.service oficial.
+    ulimits:
+      nofile:
+        soft: 500000
+        hard: 500000
+    # A JVM roda como usuário comum e precisa abrir a porta 443 dentro do container.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 60s
+    logging: *logging
     networks:
       - esus-net
 
 networks:
   esus-net:
     driver: bridge
-    # Sub-rede fixa reservada para evitar colisão com faixas de rede privada
-    # comumente utilizadas em VPNs (WireGuard/OpenVPN) e enlaces municipais (10/8, 172.16/12 e 192.168/16).
+    # 198.18.0.0/15 é reservado para testes de rede (RFC 2544) e não colide com
+    # 10/8, 172.16/12 e 192.168/16 usados em VPNs e enlaces municipais.
+    # Exceção: clientes Clash/sing-box usam 198.18.0.0/15 como fake-IP.
     ipam:
       config:
-        - subnet: 198.18.200.0/24
+        - subnet: ${ESUS_NET_SUBNET:-198.18.200.0/24}
