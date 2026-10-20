@@ -1,53 +1,58 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# e-SUS APS PEC em Docker (Linux) - Inicializador de Nova Base de Dados (Zero)
+# e-SUS APS PEC em Docker (Linux) - Banco novo (instalação do zero)
 # ==============================================================================
-# Finalidade: Para municípios que estão instalando uma base nova do zero
-# (sem backup existente para restaurar). Executa o migrador oficial (Liquibase)
-# criando todas as 1.200 tabelas estruturais e sementes do sistema.
+# Para municípios sem backup a restaurar. Roda o migrador oficial (Liquibase),
+# que cria as ~1.180 tabelas e os dados iniciais, e cria o usuário de leitura.
+#
+# Uso: ./scripts/init-new-db.sh [--treinamento]
+#   --treinamento  cria uma base de TREINAMENTO (não usar em produção)
 # ==============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-cd "$PROJECT_ROOT"
+MIGR_FLAGS=""
+case "${1:-}" in
+  --treinamento) MIGR_FLAGS="-treinamento" ;;
+  "") ;;
+  *) die "Uso: $0 [--treinamento]" ;;
+esac
+
+load_env
 
 echo "=========================================================="
-echo "Inicialização de Nova Base de Dados: e-SUS APS PEC"
-echo "Data: $(date)"
-echo "Ambiente: Base Zerada (Execução do Migrador Oficial)"
+echo "Banco novo do e-SUS APS PEC - $(date '+%d/%m/%Y %H:%M:%S')"
+[ -n "$MIGR_FLAGS" ] && echo "MODO TREINAMENTO"
 echo "=========================================================="
 
-# 1. Garante que o banco de dados PostgreSQL esteja em execução e pronto
-echo "==> Verificando disponibilidade do container esus-db..."
+log "Subindo o PostgreSQL..."
 docker compose up -d esus-db
+wait_db 120
 
-echo "==> Aguardando banco de dados responder..."
-until docker exec esus-db pg_isready -U postgres -d esus >/dev/null 2>&1; do
-  sleep 2
-done
-echo "==> PostgreSQL ativo e pronto."
+EXISTING="$(count_tables "$POSTGRES_DB")"
+if [ "$EXISTING" -gt 0 ]; then
+  die "O banco '${POSTGRES_DB}' já tem ${EXISTING} tabelas. Para atualizar a versão use ./scripts/atualizar-pec.sh; para trocar a base use ./scripts/restore.sh."
+fi
 
-# 2. Executa o migrador oficial Liquibase empacotado na imagem
-echo "==> Executando migrações estruturais do e-SUS PEC (migrador.jar)..."
-echo "    (Isso pode levar de 2 a 5 minutos na primeira execução)"
+if ! docker image inspect "esus-pec-docker:${PEC_IMAGE_TAG:-local}" >/dev/null 2>&1; then
+  log "Imagem do PEC não encontrada. Construindo..."
+  docker compose build esus-pec
+fi
 
-docker compose run --rm \
-  --entrypoint "java -Xms1024M -Xmx2048M -jar /opt/pec/database/migrador.jar" \
-  esus-pec
+# O migrador sai com código 0 mesmo quando só imprime a ajuda; a contagem de
+# tabelas abaixo é a confirmação real.
+# shellcheck disable=SC2086
+run_migrador "$POSTGRES_DB" $MIGR_FLAGS
 
-echo "==> Migração estrutural concluída com sucesso."
+TOTAL="$(count_tables "$POSTGRES_DB")"
+[ "$TOTAL" -ge 1000 ] || die "O migrador terminou, mas o banco tem só ${TOTAL} tabelas. Veja a saída acima."
+log "Migração OK: ${TOTAL} tabelas criadas."
 
-# 3. Aplica permissões de segurança para a role esus_leitura (LGPD)
-echo "==> Aplicando permissões do usuário de leitura (esus_leitura)..."
-docker exec -i esus-db psql -U postgres -d esus < "${PROJECT_ROOT}/sql/01-init-esus-leitura.sql"
-
-# 4. Checagem de integridade e contagem de tabelas criadas
-TOTAL_TABLES=$(docker exec -t esus-db psql -U postgres -d esus -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' \r\n')
+log "Aplicando usuário de leitura (${ESUS_LEITURA_USER})..."
+apply_leitura "$POSTGRES_DB"
 
 echo "=========================================================="
-echo "Inicialização concluída com êxito!"
-echo "Tabelas criadas no schema public: ${TOTAL_TABLES}"
-echo "Agora você pode iniciar a aplicação com: docker compose up -d"
+echo "Banco pronto. Inicie o PEC com: docker compose up -d"
 echo "=========================================================="

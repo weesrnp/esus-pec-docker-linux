@@ -1,0 +1,21 @@
+# ==============================================================================
+# HTTPS com o certmgr oficial do PEC (complemento do compose.yml)
+# ==============================================================================
+# Requisitos (manual oficial "HTTPS Automatizado"):
+#   - domínio público (ex.: esus.municipio.pr.gov.br) apontando para este servidor;
+#   - portas 80 e 443 liberadas e encaminhadas no roteador;
+#   - no .env: PEC_SSL_DOMAIN e PEC_BIND_IP com o IP que recebe o encaminhamento
+#     (ou 0.0.0.0). Com 127.0.0.1 a validação do domínio não chega ao container.
+#
+# Uso: docker compose -f compose.yml -f compose.ssl.yml up -d
+# Para os scripts (backup, atualização, troca de senhas) também usarem este
+# arquivo, ponha no .env:  COMPOSE_FILE=compose.yml:compose.ssl.yml
+# ==============================================================================
+services:
+  esus-pec:
+    environment:
+      PEC_SSL: "1"
+      PEC_SSL_DOMAIN: ${PEC_SSL_DOMAIN:?defina PEC_SSL_DOMAIN no .env para ativar o HTTPS}
+    ports:
+      # Porta 80 usada na validação do domínio durante a emissão do certificado.
+      - "${PEC_BIND_IP:-${LAN_IP:-127.0.0.1}}:80:80"

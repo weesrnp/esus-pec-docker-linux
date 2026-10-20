@@ -1,0 +1,7 @@
+# Scripts executados dentro de containers Linux precisam de LF.
+# Sem isso, um clone no Windows (core.autocrlf=true) gera "bash\r" e o container entra em loop.
+* text=auto eol=lf
+
+*.png binary
+*.jar binary
+*.backup binary
