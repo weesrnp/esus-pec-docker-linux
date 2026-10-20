@@ -1,0 +1,11 @@
+# O build só precisa do entrypoint e da pasta instalador/.
+# Tudo o mais fica fora do contexto: .env, backups com dados de pacientes e
+# volumes/pg_data (0700, de outro usuário).
+#
+# Atenção: exceções com curinga (ex.: !eSUS-*.jar) fazem o BuildKit percorrer
+# todas as pastas, inclusive volumes/pg_data, e o build falha com
+# "permission denied" depois do primeiro "up". Por isso o instalador fica numa
+# pasta própria e a exceção não tem curinga.
+*
+!docker/entrypoint.sh
+!instalador
